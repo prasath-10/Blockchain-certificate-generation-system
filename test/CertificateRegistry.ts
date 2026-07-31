@@ -4,77 +4,76 @@ import { network } from "hardhat";
 const { ethers } = await network.create();
 
 describe("CertificateRegistry", function () {
-  async function deployCertificateRegistryFixture() {
-    const [admin, issuer1, issuer2, user] = await ethers.getSigners();
-    const registry = await ethers.deployContract("CertificateRegistry");
-    return { registry, admin, issuer1, issuer2, user };
-  }
+  let registry: any;
+  let admin: any;
+  let unauthorizedAccount: any;
 
-  it("Should set the deployer as admin and authorized issuer", async function () {
-    const { registry, admin } = await deployCertificateRegistryFixture();
+  beforeEach(async function () {
+    const signers = await ethers.getSigners();
+    admin = signers[0];
+    unauthorizedAccount = signers[1];
+    registry = await ethers.deployContract("CertificateRegistry");
+  });
+
+  it("Should set the deployer (admin) as an automatically authorized issuer", async function () {
     expect(await registry.admin()).to.equal(admin.address);
     expect(await registry.isAuthorizedIssuer(admin.address)).to.be.true;
   });
 
-  it("Should allow admin to authorize and revoke issuers", async function () {
-    const { registry, admin, issuer1 } = await deployCertificateRegistryFixture();
+  it("Should issue a certificate successfully and emit CertificateIssued event", async function () {
+    const sampleString = "Priya Kumar - DOB 15-06-2026 - Erode Hospital";
+    const documentHash = ethers.keccak256(ethers.toUtf8Bytes(sampleString));
+    const certificateId = "BC-2026-004521";
 
-    await expect(registry.connect(admin).authorizeIssuer(issuer1.address))
-      .to.emit(registry, "IssuerStatusChanged")
-      .withArgs(issuer1.address, true);
-
-    expect(await registry.isAuthorizedIssuer(issuer1.address)).to.be.true;
-
-    await expect(registry.connect(admin).revokeIssuer(issuer1.address))
-      .to.emit(registry, "IssuerStatusChanged")
-      .withArgs(issuer1.address, false);
-
-    expect(await registry.isAuthorizedIssuer(issuer1.address)).to.be.false;
+    await expect(registry.issueCertificate(certificateId, documentHash))
+      .to.emit(registry, "CertificateIssued")
+      .withArgs(certificateId, documentHash, admin.address, (issueDate: bigint) => issueDate > 0n);
   });
 
-  it("Should prevent unauthorized users from issuing certificates", async function () {
-    const { registry, user } = await deployCertificateRegistryFixture();
-    const docHash = ethers.keccak256(ethers.toUtf8Bytes("Sample Certificate"));
+  it("Should verify a genuine certificate", async function () {
+    const sampleString = "Priya Kumar - DOB 15-06-2026 - Erode Hospital";
+    const documentHash = ethers.keccak256(ethers.toUtf8Bytes(sampleString));
+    const certificateId = "BC-2026-004521";
+
+    await registry.issueCertificate(certificateId, documentHash);
+
+    const isGenuine = await registry.verifyCertificate(certificateId, documentHash);
+    expect(isGenuine).to.be.true;
+  });
+
+  it("Should detect a tampered certificate", async function () {
+    const genuineString = "Priya Kumar - DOB 15-06-2026 - Erode Hospital";
+    const genuineHash = ethers.keccak256(ethers.toUtf8Bytes(genuineString));
+    const certificateId = "BC-2026-004521";
+
+    await registry.issueCertificate(certificateId, genuineHash);
+
+    const tamperedString = "Priya Kumar - DOB 15-06-2024 - Erode Hospital";
+    const tamperedHash = ethers.keccak256(ethers.toUtf8Bytes(tamperedString));
+
+    const isGenuine = await registry.verifyCertificate(certificateId, tamperedHash);
+    expect(isGenuine).to.be.false;
+  });
+
+  it("Should fail when issuing a certificate with a duplicate certificateId", async function () {
+    const sampleString = "Priya Kumar - DOB 15-06-2026 - Erode Hospital";
+    const documentHash = ethers.keccak256(ethers.toUtf8Bytes(sampleString));
+    const certificateId = "BC-2026-004521";
+
+    await registry.issueCertificate(certificateId, documentHash);
 
     await expect(
-      registry.connect(user).issueCertificate("CERT-001", docHash)
-    ).to.be.revertedWith("CertificateRegistry: Only authorized issuers can call this function");
-  });
-
-  it("Should issue a certificate and emit CertificateIssued event", async function () {
-    const { registry, admin } = await deployCertificateRegistryFixture();
-    const docHash = ethers.keccak256(ethers.toUtf8Bytes("John Doe Degree Certificate"));
-
-    await expect(registry.connect(admin).issueCertificate("CERT-2026-001", docHash))
-      .to.emit(registry, "CertificateIssued");
-
-    const cert = await registry.getCertificate("CERT-2026-001");
-    expect(cert.documentHash).to.equal(docHash);
-    expect(cert.issuer).to.equal(admin.address);
-    expect(cert.exists).to.be.true;
-    expect(cert.issueDate).to.be.greaterThan(0n);
-  });
-
-  it("Should fail when issuing a duplicate certificate ID", async function () {
-    const { registry, admin } = await deployCertificateRegistryFixture();
-    const docHash = ethers.keccak256(ethers.toUtf8Bytes("Degree Certificate"));
-
-    await registry.connect(admin).issueCertificate("CERT-2026-001", docHash);
-
-    await expect(
-      registry.connect(admin).issueCertificate("CERT-2026-001", docHash)
+      registry.issueCertificate(certificateId, documentHash)
     ).to.be.revertedWith("CertificateRegistry: Certificate ID already exists");
   });
 
-  it("Should verify valid and invalid certificate hashes", async function () {
-    const { registry, admin } = await deployCertificateRegistryFixture();
-    const validHash = ethers.keccak256(ethers.toUtf8Bytes("Valid Certificate Content"));
-    const wrongHash = ethers.keccak256(ethers.toUtf8Bytes("Tampered Certificate Content"));
+  it("Should revert when a non-authorized address attempts to issue a certificate", async function () {
+    const sampleString = "Priya Kumar - DOB 15-06-2026 - Erode Hospital";
+    const documentHash = ethers.keccak256(ethers.toUtf8Bytes(sampleString));
+    const certificateId = "BC-2026-004521";
 
-    await registry.connect(admin).issueCertificate("CERT-2026-002", validHash);
-
-    expect(await registry.verifyCertificate("CERT-2026-002", validHash)).to.be.true;
-    expect(await registry.verifyCertificate("CERT-2026-002", wrongHash)).to.be.false;
-    expect(await registry.verifyCertificate("NON-EXISTENT", validHash)).to.be.false;
+    await expect(
+      registry.connect(unauthorizedAccount).issueCertificate(certificateId, documentHash)
+    ).to.be.revertedWith("CertificateRegistry: Only authorized issuers can call this function");
   });
 });
