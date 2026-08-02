@@ -62,19 +62,89 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Interactive Browser Test Page Route
+app.get("/", (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>Certificate Hash Generator Test</title>
+      <style>
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 40px auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        h2 { color: #1e293b; margin-top: 0; }
+        p { color: #64748b; font-size: 14px; }
+        input[type="file"] { margin: 16px 0; display: block; }
+        button { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 500; }
+        button:hover { background: #1d4ed8; }
+        pre { background: #0f172a; color: #38bdf8; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; margin-top: 16px; }
+      </style>
+    </head>
+    <body>
+      <h2>🎓 Certificate Hash Generator Test</h2>
+      <p>Select a file to test the <code>POST /api/certificates/hash</code> endpoint directly from your browser:</p>
+      <form id="uploadForm">
+        <input type="file" id="certFile" name="certificate" required />
+        <button type="submit">Upload & Generate Hash</button>
+      </form>
+      <h3>Response Output:</h3>
+      <pre id="result">Select a file above and click Upload...</pre>
+
+      <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const fileInput = document.getElementById('certFile');
+          if (!fileInput.files[0]) return;
+
+          const formData = new FormData();
+          formData.append('certificate', fileInput.files[0]);
+
+          document.getElementById('result').textContent = 'Uploading file & computing SHA-256 hash...';
+
+          try {
+            const response = await fetch('/api/certificates/hash', {
+              method: 'POST',
+              body: formData
+            });
+            const data = await response.json();
+            document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+          } catch (err) {
+            document.getElementById('result').textContent = 'Error: ' + err.message;
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+
 /**
  * Route: POST /api/certificates/hash
  * Description: Accepts a certificate file upload, calculates its SHA-256 cryptographic hash,
  *              and returns file metadata along with the computed hash.
  * Field Name: "certificate"
  */
-app.post("/api/certificates/hash", upload.single("certificate"), (req, res) => {
-  // Step 4: Basic Error Handling - Check if a file was provided in the request
-  if (!req.file) {
-    return res.status(400).json({
-      error: "No file uploaded. Please upload a certificate file using the field name 'certificate'.",
-    });
-  }
+app.post(
+  "/api/certificates/hash",
+  (req, res, next) => {
+    console.log("=== INCOMING REQUEST DEBUG ===");
+    console.log("Method:", req.method);
+    console.log("Content-Type Header:", req.headers["content-type"]);
+    next();
+  },
+  upload.single("certificate"),
+  (req, res) => {
+    console.log("Parsed req.file:", req.file);
+    console.log("Parsed req.body:", req.body);
+
+    // Step 4: Basic Error Handling - Check if a file was provided in the request
+    if (!req.file) {
+      return res.status(400).json({
+        error: "No file uploaded. Please upload a certificate file using the field name 'certificate'.",
+      });
+    }
+
 
   try {
     // Step 5: Read the uploaded file from the temporary uploads directory
