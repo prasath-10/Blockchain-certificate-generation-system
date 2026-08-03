@@ -1,0 +1,79 @@
+# ==============================================================================
+# GitHub Actions CI Workflow for Blockchain Smart Contract Project
+# ==============================================================================
+# Continuous Integration (CI) automatically runs tests and checks every time
+# code is pushed or a pull request is created. This ensures smart contracts
+# compile correctly and pass all tests before being merged into 'main'.
+
+name: Smart Contract CI
+
+# ==============================================================================
+# Trigger Events
+# ==============================================================================
+# Specifies the git events that will trigger this workflow.
+on:
+  # Trigger on every push to the 'main' branch
+  push:
+    branches:
+      - main
+
+  # Trigger on every pull request targeting the 'main' branch
+  pull_request:
+    branches:
+      - main
+
+# ==============================================================================
+# Jobs Definition
+# ==============================================================================
+# A job is a set of steps executed on a fresh virtual machine (runner).
+jobs:
+  smart-contract-ci:
+    # Clear, descriptive job name shown in GitHub's Actions tab
+    name: Smart Contract CI
+
+    # Virtual machine runner environment provided by GitHub
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------------------
+      # Step 1: Checkout Repository
+      # ------------------------------------------------------------------------
+      # Downloads/clones your project code from GitHub into the runner environment.
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------------
+      # Step 2: Set up Node.js (LTS Version)
+      # ------------------------------------------------------------------------
+      # Configures Node.js on the runner machine using the latest LTS release.
+      # 'cache: npm' caches downloaded npm packages to make future CI runs faster.
+      - name: Set up Node.js (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      # ------------------------------------------------------------------------
+      # Step 3: Install Dependencies
+      # ------------------------------------------------------------------------
+      # Installs all project packages (Hardhat, Ethers, Chai, TypeScript, etc.)
+      # 'npm ci' (Clean Install) is faster and more reliable in CI environments
+      # because it strictly follows package-lock.json.
+      - name: Install dependencies
+        run: npm ci
+
+      # ------------------------------------------------------------------------
+      # Step 4: Compile Smart Contracts
+      # ------------------------------------------------------------------------
+      # Runs Hardhat compiler to verify all Solidity smart contracts compile
+      # without syntax or type errors.
+      - name: Compile smart contracts
+        run: npx hardhat compile
+
+      # ------------------------------------------------------------------------
+      # Step 5: Run Smart Contract Tests
+      # ------------------------------------------------------------------------
+      # Executes unit and integration tests (*.ts / *.sol) using Hardhat.
+      # If any test fails, the CI pipeline fails and notifies the team.
+      - name: Run smart contract tests
+        run: npx hardhat test
