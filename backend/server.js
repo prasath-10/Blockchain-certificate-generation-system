@@ -122,6 +122,20 @@ app.get("/", (req, res) => {
         <pre id="issueResult">Fill in the form above and click Issue...</pre>
       </div>
 
+      <!-- Section 3: Verify certificate -->
+      <div class="card">
+        <h3>3. Verify Certificate on Blockchain</h3>
+        <p>Re-hashes the file and calls <code>verifyCertificate()</code> on-chain to confirm authenticity.</p>
+        <form id="verifyForm">
+          <label for="verifyCertId">Certificate ID (must match the one used during issuance)</label>
+          <input type="text" id="verifyCertId" placeholder="CERT-2026-001" required />
+          <label for="verifyFile">Certificate File (the original, unmodified file)</label>
+          <input type="file" id="verifyFile" name="certificate" required />
+          <button type="submit" style="background:#7c3aed">Verify on Blockchain</button>
+        </form>
+        <pre id="verifyResult">Fill in the form above and click Verify...</pre>
+      </div>
+
       <script>
         // ---- Hash endpoint test ----
         document.getElementById('hashForm').addEventListener('submit', async (e) => {
@@ -156,6 +170,25 @@ app.get("/", (req, res) => {
             document.getElementById('issueResult').textContent = JSON.stringify(data, null, 2);
           } catch (err) {
             document.getElementById('issueResult').textContent = 'Error: ' + err.message;
+          }
+        });
+
+        // ---- Verify endpoint test ----
+        document.getElementById('verifyForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const certId = document.getElementById('verifyCertId').value.trim();
+          const fileInput = document.getElementById('verifyFile');
+          if (!certId || !fileInput.files[0]) return;
+          const formData = new FormData();
+          formData.append('certificateId', certId);
+          formData.append('certificate', fileInput.files[0]);
+          document.getElementById('verifyResult').textContent = 'Querying blockchain... (no gas cost)';
+          try {
+            const res = await fetch('/api/certificates/verify', { method: 'POST', body: formData });
+            const data = await res.json();
+            document.getElementById('verifyResult').textContent = JSON.stringify(data, null, 2);
+          } catch (err) {
+            document.getElementById('verifyResult').textContent = 'Error: ' + err.message;
           }
         });
       </script>
@@ -344,6 +377,113 @@ app.post(
       const reason = err?.reason || err?.message || "Unknown error";
       return res.status(500).json({
         error: "Failed to issue certificate on the blockchain.",
+        reason,
+      });
+    }
+  }
+);
+
+// ==========================================
+// Route: POST /api/certificates/verify
+// ==========================================
+/**
+ * Route: POST /api/certificates/verify
+ * Description: Verifies the authenticity of a certificate by re-hashing the uploaded file
+ *              and comparing it on-chain against the recorded document hash.
+ * 
+ * What it does, step by step:
+ *   1. Accepts a file upload ("certificate") and a certificate ID ("certificateId") from form-data.
+ *   2. Reads the uploaded file and computes its SHA-256 hash (formatted as '0x' + hex string).
+ *   3. Performs a read-only ("view") call to the smart contract: verifyCertificate(certificateId, hash).
+ *      - View calls execute locally against the RPC provider without sending a transaction.
+ *      - They consume NO gas and cost NO ETH.
+ *   4. If verified, calls getCertificate(certificateId) on-chain to fetch metadata (issuer address, issue date).
+ *   5. Cleans up (deletes) the temporary uploaded file from the server disk.
+ *   6. Returns a JSON response with verification status and details.
+ */
+app.post(
+  "/api/certificates/verify",
+  upload.single("certificate"), // Step 1: Process file upload using existing Multer configuration
+  async (req, res) => {
+    // --- Step 1: Input Validation ---
+
+    // Ensure a certificate file was uploaded
+    if (!req.file) {
+      return res.status(400).json({
+        error: "No file uploaded. Please include a 'certificate' file field.",
+      });
+    }
+
+    // Ensure certificateId was provided in the request body
+    const certificateId = req.body.certificateId;
+    if (!certificateId || certificateId.trim() === "") {
+      // Clean up the temporary file before returning early
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({
+        error: "Missing 'certificateId' field. Please provide a certificate ID to verify.",
+      });
+    }
+
+    const trimmedCertId = certificateId.trim();
+    let hash;
+
+    // --- Step 2: Compute SHA-256 Hash ---
+    try {
+      // Read the contents of the uploaded file into a buffer
+      const fileBuffer = fs.readFileSync(req.file.path);
+
+      // Generate SHA-256 hash with '0x' prefix (matching the format used during issuance)
+      hash = "0x" + crypto.createHash("sha256").update(fileBuffer).digest("hex");
+    } catch (err) {
+      console.error("Error reading or hashing file for verification:", err);
+      return res.status(500).json({ error: "Failed to process the certificate file." });
+    } finally {
+      // Step 3: File Cleanup - Always delete the temporary uploaded file after hashing
+      fs.unlink(req.file.path, (unlinkErr) => {
+        if (unlinkErr) console.error("Warning: Could not delete temporary verify file:", unlinkErr);
+      });
+    }
+
+    // --- Step 4: Smart Contract Verification ---
+    try {
+      console.log(`\n=== VERIFYING CERTIFICATE ON-CHAIN ===`);
+      console.log(`Certificate ID : ${trimmedCertId}`);
+      console.log(`Computed Hash  : ${hash}`);
+
+      // Call the read-only contract function verifyCertificate(id, hash)
+      // This compares the calculated hash with the hash stored in the smart contract's state.
+      const isVerified = await contract.verifyCertificate(trimmedCertId, hash);
+
+      if (isVerified) {
+        // If verified, fetch certificate metadata (issuer address, issue timestamp) from the contract
+        const certData = await contract.getCertificate(trimmedCertId);
+
+        // Convert Solidity uint256 timestamp (BigInt in ethers v6) to string format for JSON serialization
+        const issueDate = certData.issueDate.toString();
+
+        console.log(`Result: VERIFIED (Authentic) | Issuer: ${certData.issuer} | Issue Date: ${issueDate}`);
+
+        return res.status(200).json({
+          verified: true,
+          certificateId: trimmedCertId,
+          issuer: certData.issuer,
+          issueDate: issueDate,
+          message: "Certificate is authentic",
+        });
+      } else {
+        console.log(`Result: NOT VERIFIED (Hash mismatch or certificate does not exist)`);
+
+        return res.status(200).json({
+          verified: false,
+          certificateId: trimmedCertId,
+          message: "Certificate could not be verified - may be tampered or does not exist",
+        });
+      }
+    } catch (err) {
+      console.error("Smart contract verification call failed:", err);
+      const reason = err?.reason || err?.message || "Unknown error";
+      return res.status(500).json({
+        error: "Failed to query the blockchain contract during verification.",
         reason,
       });
     }
