@@ -7,12 +7,17 @@ const crypto = require("crypto");
 const multer = require("multer");
 
 // ==========================================
-// Blockchain Setup
+// Database & Blockchain Setup
 // ==========================================
-// Import the pre-configured contract instance from our blockchain module.
-// This gives us a ready-to-use ethers.Contract object pointing at the
-// deployed CertificateRegistry on Ganache, signed by the deployer wallet.
+// 1. Connect to MongoDB using our helper file (backend/db.js)
+const connectDB = require("./db");
+// 2. Import Mongoose Certificate model for saving and fetching metadata off-chain
+const Certificate = require("./models/Certificate");
+// 3. Import pre-configured contract instance for Ganache smart contract calls
 const { contract } = require("./blockchain");
+
+// Establish database connection
+connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -26,7 +31,7 @@ app.use(express.json());
 // ==========================================
 // Step 1: Upload Folder Setup
 // ==========================================
-// Path to the 'uploads' folder where temporary files will be saved
+// Path to the 'uploads' folder where temporary files will be saved during requests
 const uploadsDir = path.join(__dirname, "uploads");
 
 // Automatically create the 'uploads' folder if it doesn't exist yet
@@ -38,31 +43,26 @@ if (!fs.existsSync(uploadsDir)) {
 // Step 2: Configure Multer Storage Engine
 // ==========================================
 // Multer is Express middleware for processing file uploads (multipart/form-data).
-// diskStorage lets us configure where uploaded files are saved and what they are named.
 const storage = multer.diskStorage({
-  // Specify destination folder for uploaded files
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
-  // Generate a unique filename using timestamp + random number to avoid filename conflicts
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(null, `${uniqueSuffix}-${file.originalname}`);
   },
 });
 
-// Create Multer upload instance using disk storage configuration
 const upload = multer({
   storage: storage,
-  // Limit maximum file size (e.g., 10MB) to protect the server
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
 });
 
 // ==========================================
 // Step 3: Routes
 // ==========================================
 
-// Health Check Route (Basic verification that server is operational)
+// Health Check Route (Verifies server health)
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
@@ -79,17 +79,21 @@ app.get("/", (req, res) => {
       <meta charset="UTF-8">
       <title>Certificate Registry — Backend Test</title>
       <style>
-        body { font-family: system-ui, -apple-system, sans-serif; max-width: 680px; margin: 40px auto; padding: 24px; }
-        h1 { color: #1e293b; margin-top: 0; font-size: 22px; }
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 24px; background: #f8fafc; color: #1e293b; }
+        h1 { color: #0f172a; margin-top: 0; font-size: 24px; }
         h3 { color: #334155; margin-bottom: 6px; }
         p { color: #64748b; font-size: 14px; margin-top: 0; }
-        .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
-        label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 4px; }
-        input[type="file"], input[type="text"] { width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; }
-        button { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.04); }
+        label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 4px; margin-top: 8px; }
+        input[type="file"], input[type="text"] { width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; }
+        button { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; margin-top: 8px; }
         button:hover { background: #1d4ed8; }
         button.green { background: #16a34a; }
         button.green:hover { background: #15803d; }
+        button.purple { background: #7c3aed; }
+        button.purple:hover { background: #6d28d9; }
+        button.teal { background: #0d9488; }
+        button.teal:hover { background: #0f766e; }
         pre { background: #0f172a; color: #38bdf8; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 12px; margin-top: 12px; white-space: pre-wrap; word-break: break-all; }
       </style>
     </head>
@@ -98,8 +102,8 @@ app.get("/", (req, res) => {
 
       <!-- Section 1: Hash only -->
       <div class="card">
-        <h3>1. Hash a File (no blockchain)</h3>
-        <p>Generates a SHA-256 hash of the uploaded file without writing to the blockchain.</p>
+        <h3>1. Hash a File (no blockchain / no database)</h3>
+        <p>Generates a SHA-256 hash of the uploaded file without saving anywhere.</p>
         <form id="hashForm">
           <label for="hashFile">Certificate File</label>
           <input type="file" id="hashFile" name="certificate" required />
@@ -108,32 +112,55 @@ app.get("/", (req, res) => {
         <pre id="hashResult">Select a file above and click the button...</pre>
       </div>
 
-      <!-- Section 2: Issue on blockchain -->
+      <!-- Section 2: Issue on blockchain & save metadata to MongoDB -->
       <div class="card">
-        <h3>2. Issue Certificate on Blockchain</h3>
-        <p>Hashes the file AND calls <code>issueCertificate()</code> on the smart contract via Ganache.</p>
+        <h3>2. Issue Certificate (Blockchain + MongoDB)</h3>
+        <p>Hashes the file, issues it on Ganache, AND saves full metadata into MongoDB.</p>
         <form id="issueForm">
           <label for="certId">Certificate ID (unique, e.g. CERT-2026-001)</label>
           <input type="text" id="certId" placeholder="CERT-2026-001" required />
+          
+          <label for="holderName">Holder Name (Student / Recipient)</label>
+          <input type="text" id="holderName" placeholder="Alice Smith" required />
+
+          <label for="issuerName">Issuer Name (Authority / University)</label>
+          <input type="text" id="issuerName" placeholder="State University" required />
+
+          <label for="certType">Certificate Type</label>
+          <input type="text" id="certType" placeholder="Bachelor of Science in Computer Science" />
+
           <label for="issueFile">Certificate File</label>
           <input type="file" id="issueFile" name="certificate" required />
-          <button type="submit" class="green">Issue on Blockchain</button>
+          
+          <button type="submit" class="green">Issue on Blockchain &amp; Save Metadata</button>
         </form>
         <pre id="issueResult">Fill in the form above and click Issue...</pre>
       </div>
 
       <!-- Section 3: Verify certificate -->
       <div class="card">
-        <h3>3. Verify Certificate on Blockchain</h3>
-        <p>Re-hashes the file and calls <code>verifyCertificate()</code> on-chain to confirm authenticity.</p>
+        <h3>3. Verify Certificate (Blockchain + MongoDB Metadata)</h3>
+        <p>Re-hashes file, verifies on-chain, and fetches metadata from MongoDB.</p>
         <form id="verifyForm">
-          <label for="verifyCertId">Certificate ID (must match the one used during issuance)</label>
+          <label for="verifyCertId">Certificate ID</label>
           <input type="text" id="verifyCertId" placeholder="CERT-2026-001" required />
-          <label for="verifyFile">Certificate File (the original, unmodified file)</label>
+          <label for="verifyFile">Certificate File (Original unmodified file)</label>
           <input type="file" id="verifyFile" name="certificate" required />
-          <button type="submit" style="background:#7c3aed">Verify on Blockchain</button>
+          <button type="submit" class="purple">Verify Certificate</button>
         </form>
         <pre id="verifyResult">Fill in the form above and click Verify...</pre>
+      </div>
+
+      <!-- Section 4: Get Certificate Details by ID -->
+      <div class="card">
+        <h3>4. Fetch Certificate Details by ID (GET /api/certificates/:id)</h3>
+        <p>Fetches stored MongoDB metadata and smart contract on-chain info for any Certificate ID.</p>
+        <form id="getForm">
+          <label for="getCertId">Certificate ID</label>
+          <input type="text" id="getCertId" placeholder="CERT-2026-001" required />
+          <button type="submit" class="teal">Fetch Certificate Details</button>
+        </form>
+        <pre id="getResult">Enter Certificate ID and click Fetch...</pre>
       </div>
 
       <script>
@@ -158,12 +185,21 @@ app.get("/", (req, res) => {
         document.getElementById('issueForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           const certId = document.getElementById('certId').value.trim();
+          const holderName = document.getElementById('holderName').value.trim();
+          const issuerName = document.getElementById('issuerName').value.trim();
+          const certType = document.getElementById('certType').value.trim();
           const fileInput = document.getElementById('issueFile');
-          if (!certId || !fileInput.files[0]) return;
+
+          if (!certId || !holderName || !issuerName || !fileInput.files[0]) return;
+
           const formData = new FormData();
           formData.append('certificateId', certId);
+          formData.append('holderName', holderName);
+          formData.append('issuerName', issuerName);
+          formData.append('certificateType', certType);
           formData.append('certificate', fileInput.files[0]);
-          document.getElementById('issueResult').textContent = 'Sending transaction to Ganache... (may take a few seconds)';
+
+          document.getElementById('issueResult').textContent = 'Issuing on blockchain and saving to MongoDB...';
           try {
             const res = await fetch('/api/certificates/issue', { method: 'POST', body: formData });
             const data = await res.json();
@@ -182,7 +218,7 @@ app.get("/", (req, res) => {
           const formData = new FormData();
           formData.append('certificateId', certId);
           formData.append('certificate', fileInput.files[0]);
-          document.getElementById('verifyResult').textContent = 'Querying blockchain... (no gas cost)';
+          document.getElementById('verifyResult').textContent = 'Querying blockchain & MongoDB...';
           try {
             const res = await fetch('/api/certificates/verify', { method: 'POST', body: formData });
             const data = await res.json();
@@ -191,193 +227,214 @@ app.get("/", (req, res) => {
             document.getElementById('verifyResult').textContent = 'Error: ' + err.message;
           }
         });
+
+        // ---- Get Details endpoint test ----
+        document.getElementById('getForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const certId = document.getElementById('getCertId').value.trim();
+          if (!certId) return;
+          document.getElementById('getResult').textContent = 'Fetching details...';
+          try {
+            const res = await fetch('/api/certificates/' + encodeURIComponent(certId));
+            const data = await res.json();
+            document.getElementById('getResult').textContent = JSON.stringify(data, null, 2);
+          } catch (err) {
+            document.getElementById('getResult').textContent = 'Error: ' + err.message;
+          }
+        });
       </script>
     </body>
     </html>
   `);
 });
 
-
 /**
  * Route: POST /api/certificates/hash
- * Description: Accepts a certificate file upload, calculates its SHA-256 cryptographic hash,
- *              and returns file metadata along with the computed hash.
- * Field Name: "certificate"
+ * Description: Calculates SHA-256 hash of an uploaded file without saving to DB or Blockchain.
  */
 app.post(
   "/api/certificates/hash",
-  (req, res, next) => {
-    console.log("=== INCOMING REQUEST DEBUG ===");
-    console.log("Method:", req.method);
-    console.log("Content-Type Header:", req.headers["content-type"]);
-    next();
-  },
   upload.single("certificate"),
   (req, res) => {
-    console.log("Parsed req.file:", req.file);
-    console.log("Parsed req.body:", req.body);
-
-    // Step 4: Basic Error Handling - Check if a file was provided in the request
     if (!req.file) {
       return res.status(400).json({
-        error: "No file uploaded. Please upload a certificate file using the field name 'certificate'.",
+        error: "No file uploaded. Please upload a certificate file using field 'certificate'.",
       });
     }
 
+    try {
+      const filePath = req.file.path;
+      const fileBuffer = fs.readFileSync(filePath);
+      const hash = "0x" + crypto.createHash("sha256").update(fileBuffer).digest("hex");
 
-  try {
-    // Step 5: Read the uploaded file from the temporary uploads directory
-    const filePath = req.file.path;
-    const fileBuffer = fs.readFileSync(filePath);
+      fs.unlink(filePath, (unlinkErr) => {
+        if (unlinkErr) console.error("Warning: Could not remove temp upload file:", unlinkErr);
+      });
 
-    // Step 6: Generate SHA-256 hash of the file contents using Node.js built-in 'crypto' module
-    // We format the hash as a '0x' prefixed hex string (standard 32-byte hash format for Web3 / Smart Contracts)
-    const hash = "0x" + crypto.createHash("sha256").update(fileBuffer).digest("hex");
-
-    // Step 7: Clean up - Delete the temporary file from /uploads directory after computing hash
-    fs.unlink(filePath, (unlinkErr) => {
-      if (unlinkErr) {
-        console.error("Warning: Could not remove temporary upload file:", unlinkErr);
-      }
-    });
-
-    // Step 8: Return JSON response containing filename, SHA-256 hash, and file size in bytes
-    return res.status(200).json({
-      fileName: req.file.originalname,
-      hash: hash,
-      fileSize: req.file.size,
-    });
-  } catch (error) {
-    console.error("Error calculating file hash:", error);
-    return res.status(500).json({
-      error: "Failed to process the certificate file and calculate hash.",
-    });
+      return res.status(200).json({
+        fileName: req.file.originalname,
+        hash: hash,
+        fileSize: req.file.size,
+      });
+    } catch (error) {
+      console.error("Error calculating file hash:", error);
+      return res.status(500).json({
+        error: "Failed to process the certificate file and calculate hash.",
+      });
+    }
   }
-});
+);
 
 // ==========================================
 // Route: POST /api/certificates/issue
 // ==========================================
 /**
- * This is the main blockchain integration route.
- *
- * What it does, step by step:
- *   1. Accepts a multipart/form-data POST with two fields:
- *        - "certificate"   : the file to hash (same as the /hash route)
- *        - "certificateId" : a unique string ID for this certificate
- *   2. Reads the uploaded file and computes its SHA-256 hash.
- *   3. Calls the smart contract's issueCertificate(certificateId, hash) function.
- *   4. Waits for the transaction to be mined (confirmed on-chain).
- *   5. Returns the transaction hash + certificate details as JSON.
- *
- * How multipart form fields work with Multer:
- *   When using FormData in the browser (or curl with -F), both text fields
- *   and file fields travel in the same multipart request body.
- *   After multer processes the upload, text fields appear in req.body
- *   and the file metadata appears in req.file.
+ * Route: POST /api/certificates/issue
+ * Description: 
+ *   1. Computes SHA-256 hash of certificate file.
+ *   2. Issues certificate on Ethereum smart contract via Ganache.
+ *   3. Saves full certificate metadata (holderName, issuerName, certificateType, transactionHash, documentHash) into MongoDB.
+ * 
+ * Form Fields (multipart/form-data):
+ *   - certificate     : (File, required) The certificate PDF/image
+ *   - certificateId   : (String, required) Unique ID e.g. "CERT-2026-001"
+ *   - holderName      : (String, required) Name of the student / certificate recipient
+ *   - issuerName      : (String, required) Name of issuing institution
+ *   - certificateType : (String, optional) Type of certificate e.g. "Degree"
  */
 app.post(
   "/api/certificates/issue",
-  upload.single("certificate"), // Multer processes the uploaded file first
+  upload.single("certificate"),
   async (req, res) => {
-    // --- Input Validation ---
-
-    // Check that a file was uploaded
+    // 1. Check file upload
     if (!req.file) {
       return res.status(400).json({
         error: "No file uploaded. Please include a 'certificate' file field.",
       });
     }
 
-    // Check that a certificateId was provided as a form text field
-    const certificateId = req.body.certificateId;
+    // 2. Extract and validate text form fields
+    const { certificateId, holderName, issuerName, certificateType } = req.body;
+
     if (!certificateId || certificateId.trim() === "") {
-      // Clean up the uploaded file before returning the error
       fs.unlink(req.file.path, () => {});
       return res.status(400).json({
         error: "Missing 'certificateId' field. Please provide a unique certificate ID.",
       });
     }
 
-    // --- Hash Generation ---
+    if (!holderName || holderName.trim() === "") {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({
+        error: "Missing 'holderName' field. Please provide the holder's name.",
+      });
+    }
+
+    if (!issuerName || issuerName.trim() === "") {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({
+        error: "Missing 'issuerName' field. Please provide the issuer's name.",
+      });
+    }
+
+    const trimmedCertId = certificateId.trim();
+
+    // 3. Check if certificate ID already exists in MongoDB before hitting blockchain
+    try {
+      const existingCert = await Certificate.findOne({ certificateId: trimmedCertId });
+      if (existingCert) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(400).json({
+          error: `Certificate ID '${trimmedCertId}' already exists in MongoDB database.`,
+        });
+      }
+    } catch (dbCheckErr) {
+      console.warn("MongoDB pre-check notice:", dbCheckErr.message);
+    }
+
+    // 4. Compute SHA-256 Hash of uploaded file
     let hash;
     try {
-      // Read the uploaded file into memory as a Buffer
       const fileBuffer = fs.readFileSync(req.file.path);
-
-      // Generate SHA-256 hash formatted as a 0x-prefixed hex string.
-      // The smart contract's documentHash parameter is type bytes32, and
-      // ethers.js can accept a 0x-prefixed 32-byte hex string for bytes32.
       hash = "0x" + crypto.createHash("sha256").update(fileBuffer).digest("hex");
     } catch (err) {
       console.error("Error reading or hashing file:", err);
-      fs.unlink(req.file.path, () => {});
-      return res.status(500).json({ error: "Failed to process the certificate file." });
+      return res.status(500).json({ error: "Failed to process certificate file." });
     } finally {
-      // Always delete the temp file from /uploads once we have the hash
+      // Always remove temp upload file after hashing
       fs.unlink(req.file.path, (unlinkErr) => {
         if (unlinkErr) console.error("Warning: Could not delete temp file:", unlinkErr);
       });
     }
 
-    // --- Smart Contract Interaction ---
+    // 5. Issue on Blockchain (Smart Contract call)
+    let receipt;
     try {
       console.log(`\n=== ISSUING CERTIFICATE ON-CHAIN ===`);
-      console.log(`Certificate ID : ${certificateId}`);
+      console.log(`Certificate ID : ${trimmedCertId}`);
       console.log(`Document Hash  : ${hash}`);
-      console.log(`File Name      : ${req.file.originalname}`);
 
-      // Step A: Call the contract function.
-      // contract.issueCertificate() encodes our arguments (certificateId + hash)
-      // into a transaction, signs it with the deployer wallet, and sends it
-      // to Ganache.  This returns a TransactionResponse immediately — the
-      // transaction is in the mempool but NOT yet confirmed.
-      const tx = await contract.issueCertificate(
-        certificateId.trim(), // Solidity param: string memory certificateId
-        hash                  // Solidity param: bytes32 documentHash
-      );
+      // Call smart contract function issueCertificate(certificateId, hash)
+      const tx = await contract.issueCertificate(trimmedCertId, hash);
+      console.log(`Transaction sent! Tx Hash: ${tx.hash}`);
 
-      console.log(`Transaction sent! Hash: ${tx.hash}`);
-      console.log(`Waiting for block confirmation...`);
-
-      // Step B: Wait for the transaction to be mined.
-      // .wait() blocks until the transaction is included in a block.
-      // It returns a TransactionReceipt with details like block number and
-      // gas used.  If the transaction reverts (e.g., duplicate certificate ID),
-      // .wait() will throw an error which we catch below.
-      const receipt = await tx.wait();
-
+      // Wait for block confirmation
+      receipt = await tx.wait();
       console.log(`Confirmed in block ${receipt.blockNumber} | Gas used: ${receipt.gasUsed.toString()}`);
-
-      // Step C: Return success response with transaction details
-      return res.status(200).json({
-        success: true,
-        message: "Certificate successfully issued on the blockchain!",
-        // Core certificate data
-        certificateId: certificateId.trim(),
-        documentHash: hash,
-        fileName: req.file.originalname,
-        fileSize: req.file.size,
-        // On-chain transaction details
-        transactionHash: receipt.hash,
-        blockNumber: receipt.blockNumber,
-        gasUsed: receipt.gasUsed.toString(),
-        // Issuer wallet address (the deployer account)
-        issuedBy: receipt.from,
-      });
     } catch (err) {
-      // Common reasons this block is entered:
-      //  - The certificate ID already exists on-chain (contract revert)
-      //  - The signer account is not an authorized issuer
-      //  - Ganache is not running / wrong RPC URL
-      //  - Wrong or missing private key in .env
       console.error("Smart contract call failed:", err);
-
-      // Try to provide a friendly error message by extracting the revert reason
-      const reason = err?.reason || err?.message || "Unknown error";
+      const reason = err?.reason || err?.message || "Unknown blockchain error";
       return res.status(500).json({
         error: "Failed to issue certificate on the blockchain.",
         reason,
+      });
+    }
+
+    // 6. Save Metadata to MongoDB via Mongoose
+    try {
+      console.log(`=== SAVING METADATA TO MONGODB ===`);
+      const newCertificate = await Certificate.create({
+        certificateId: trimmedCertId,
+        certificateType: certificateType ? certificateType.trim() : "General Certificate",
+        holderName: holderName.trim(),
+        issuerName: issuerName.trim(),
+        issueDate: new Date(),
+        documentHash: hash,
+        transactionHash: receipt.hash,
+      });
+
+      console.log(`✅ Saved in MongoDB with _id: ${newCertificate._id}`);
+
+      // Return combined successful response
+      return res.status(200).json({
+        success: true,
+        message: "Certificate successfully issued on blockchain and saved to MongoDB!",
+        // MongoDB Metadata
+        metadata: {
+          id: newCertificate._id,
+          certificateId: newCertificate.certificateId,
+          holderName: newCertificate.holderName,
+          issuerName: newCertificate.issuerName,
+          certificateType: newCertificate.certificateType,
+          issueDate: newCertificate.issueDate,
+        },
+        // Blockchain Details
+        blockchain: {
+          documentHash: hash,
+          transactionHash: receipt.hash,
+          blockNumber: receipt.blockNumber,
+          gasUsed: receipt.gasUsed.toString(),
+          issuedBy: receipt.from,
+        },
+      });
+    } catch (dbErr) {
+      console.error("MongoDB save error after blockchain issuance:", dbErr);
+      // Even if DB fails, return transaction hash so user doesn't lose on-chain record
+      return res.status(207).json({
+        warning: "Issued on blockchain, but failed to save metadata to MongoDB.",
+        transactionHash: receipt.hash,
+        documentHash: hash,
+        dbError: dbErr.message,
       });
     }
   }
@@ -388,36 +445,24 @@ app.post(
 // ==========================================
 /**
  * Route: POST /api/certificates/verify
- * Description: Verifies the authenticity of a certificate by re-hashing the uploaded file
- *              and comparing it on-chain against the recorded document hash.
- * 
- * What it does, step by step:
- *   1. Accepts a file upload ("certificate") and a certificate ID ("certificateId") from form-data.
- *   2. Reads the uploaded file and computes its SHA-256 hash (formatted as '0x' + hex string).
- *   3. Performs a read-only ("view") call to the smart contract: verifyCertificate(certificateId, hash).
- *      - View calls execute locally against the RPC provider without sending a transaction.
- *      - They consume NO gas and cost NO ETH.
- *   4. If verified, calls getCertificate(certificateId) on-chain to fetch metadata (issuer address, issue date).
- *   5. Cleans up (deletes) the temporary uploaded file from the server disk.
- *   6. Returns a JSON response with verification status and details.
+ * Description:
+ *   1. Re-hashes the uploaded file.
+ *   2. Verifies the hash on-chain against smart contract state (`verifyCertificate`).
+ *   3. Queries MongoDB to fetch and return off-chain metadata (holderName, issuerName, certificateType).
  */
 app.post(
   "/api/certificates/verify",
-  upload.single("certificate"), // Step 1: Process file upload using existing Multer configuration
+  upload.single("certificate"),
   async (req, res) => {
-    // --- Step 1: Input Validation ---
-
-    // Ensure a certificate file was uploaded
+    // 1. Validate inputs
     if (!req.file) {
       return res.status(400).json({
         error: "No file uploaded. Please include a 'certificate' file field.",
       });
     }
 
-    // Ensure certificateId was provided in the request body
     const certificateId = req.body.certificateId;
     if (!certificateId || certificateId.trim() === "") {
-      // Clean up the temporary file before returning early
       fs.unlink(req.file.path, () => {});
       return res.status(400).json({
         error: "Missing 'certificateId' field. Please provide a certificate ID to verify.",
@@ -427,68 +472,149 @@ app.post(
     const trimmedCertId = certificateId.trim();
     let hash;
 
-    // --- Step 2: Compute SHA-256 Hash ---
+    // 2. Hash uploaded file
     try {
-      // Read the contents of the uploaded file into a buffer
       const fileBuffer = fs.readFileSync(req.file.path);
-
-      // Generate SHA-256 hash with '0x' prefix (matching the format used during issuance)
       hash = "0x" + crypto.createHash("sha256").update(fileBuffer).digest("hex");
     } catch (err) {
-      console.error("Error reading or hashing file for verification:", err);
-      return res.status(500).json({ error: "Failed to process the certificate file." });
+      console.error("Error hashing file for verification:", err);
+      return res.status(500).json({ error: "Failed to process certificate file." });
     } finally {
-      // Step 3: File Cleanup - Always delete the temporary uploaded file after hashing
       fs.unlink(req.file.path, (unlinkErr) => {
-        if (unlinkErr) console.error("Warning: Could not delete temporary verify file:", unlinkErr);
+        if (unlinkErr) console.error("Warning: Could not delete temp file:", unlinkErr);
       });
     }
 
-    // --- Step 4: Smart Contract Verification ---
+    // 3. Verify on Blockchain & Fetch MongoDB Metadata
     try {
-      console.log(`\n=== VERIFYING CERTIFICATE ON-CHAIN ===`);
+      console.log(`\n=== VERIFYING CERTIFICATE ===`);
       console.log(`Certificate ID : ${trimmedCertId}`);
       console.log(`Computed Hash  : ${hash}`);
 
-      // Call the read-only contract function verifyCertificate(id, hash)
-      // This compares the calculated hash with the hash stored in the smart contract's state.
+      // Call read-only smart contract function
       const isVerified = await contract.verifyCertificate(trimmedCertId, hash);
 
+      // Fetch metadata from MongoDB
+      const metadata = await Certificate.findOne({ certificateId: trimmedCertId });
+
       if (isVerified) {
-        // If verified, fetch certificate metadata (issuer address, issue timestamp) from the contract
+        // Fetch on-chain issuer & timestamp details
         const certData = await contract.getCertificate(trimmedCertId);
+        const onChainIssueDate = certData.issueDate.toString();
 
-        // Convert Solidity uint256 timestamp (BigInt in ethers v6) to string format for JSON serialization
-        const issueDate = certData.issueDate.toString();
-
-        console.log(`Result: VERIFIED (Authentic) | Issuer: ${certData.issuer} | Issue Date: ${issueDate}`);
+        console.log(`Result: VERIFIED (Authentic on Blockchain)`);
 
         return res.status(200).json({
           verified: true,
           certificateId: trimmedCertId,
-          issuer: certData.issuer,
-          issueDate: issueDate,
-          message: "Certificate is authentic",
+          documentHash: hash,
+          message: "Certificate is authentic!",
+          // On-chain info from Smart Contract
+          onChain: {
+            issuer: certData.issuer,
+            issueTimestamp: onChainIssueDate,
+          },
+          // Off-chain metadata from MongoDB
+          metadata: metadata
+            ? {
+                holderName: metadata.holderName,
+                issuerName: metadata.issuerName,
+                certificateType: metadata.certificateType,
+                issueDate: metadata.issueDate,
+                transactionHash: metadata.transactionHash,
+              }
+            : null,
         });
       } else {
-        console.log(`Result: NOT VERIFIED (Hash mismatch or certificate does not exist)`);
-
+        console.log(`Result: NOT VERIFIED (Hash mismatch or not issued)`);
         return res.status(200).json({
           verified: false,
           certificateId: trimmedCertId,
-          message: "Certificate could not be verified - may be tampered or does not exist",
+          documentHash: hash,
+          message: "Certificate verification failed — document may be tampered or not registered.",
+          metadata: metadata || null,
         });
       }
     } catch (err) {
-      console.error("Smart contract verification call failed:", err);
+      console.error("Verification query failed:", err);
       const reason = err?.reason || err?.message || "Unknown error";
       return res.status(500).json({
-        error: "Failed to query the blockchain contract during verification.",
+        error: "Failed to verify certificate.",
         reason,
       });
     }
   }
 );
+
+// ==========================================
+// Route: GET /api/certificates/:certificateId
+// ==========================================
+/**
+ * Route: GET /api/certificates/:certificateId
+ * Description:
+ *   Fetches full certificate details by certificate ID, aggregating:
+ *     - Metadata from MongoDB (holder name, issuer name, type, dates, txHash)
+ *     - Verification & issuer details from the Smart Contract on blockchain
+ */
+app.get("/api/certificates/:certificateId", async (req, res) => {
+  const { certificateId } = req.params;
+
+  if (!certificateId || certificateId.trim() === "") {
+    return res.status(400).json({ error: "Certificate ID parameter is required." });
+  }
+
+  const trimmedCertId = certificateId.trim();
+
+  try {
+    console.log(`\n=== FETCHING CERTIFICATE DETAILS FOR: ${trimmedCertId} ===`);
+
+    // 1. Fetch metadata document from MongoDB
+    const metadata = await Certificate.findOne({ certificateId: trimmedCertId });
+
+    // 2. Fetch on-chain record from Smart Contract
+    let onChain = null;
+    let existsOnChain = false;
+
+    try {
+      const certData = await contract.getCertificate(trimmedCertId);
+      // Check if certificate exists on-chain (non-empty issuer address)
+      if (certData && certData.issuer !== "0x0000000000000000000000000000000000000000") {
+        existsOnChain = true;
+        onChain = {
+          issuerAddress: certData.issuer,
+          documentHash: certData.documentHash,
+          issueTimestamp: certData.issueDate.toString(),
+        };
+      }
+    } catch (contractErr) {
+      // Contract throws revert error if certificate ID does not exist on-chain
+      console.log(`Notice: Certificate '${trimmedCertId}' not found on-chain.`);
+    }
+
+    // 3. Handle non-existent certificate
+    if (!metadata && !existsOnChain) {
+      return res.status(404).json({
+        error: `Certificate with ID '${trimmedCertId}' was not found in database or blockchain.`,
+      });
+    }
+
+    // 4. Return combined certificate report
+    return res.status(200).json({
+      certificateId: trimmedCertId,
+      status: existsOnChain ? "Issued & Active" : "Metadata Only",
+      existsInDatabase: !!metadata,
+      existsOnBlockchain: existsOnChain,
+      metadata: metadata || null,
+      onChain: onChain,
+    });
+  } catch (err) {
+    console.error("Error fetching certificate details:", err);
+    return res.status(500).json({
+      error: "Internal server error fetching certificate details.",
+      details: err.message,
+    });
+  }
+});
 
 // ==========================================
 // Global Error Handler Middleware
@@ -510,7 +636,5 @@ app.use((err, req, res, next) => {
 // Start Express Server
 // ==========================================
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
-
-
