@@ -37,7 +37,7 @@ export default defineConfig({
       type: "http",
       chainType: "l1",
       url: process.env.GANACHE_RPC_URL || "http://127.0.0.1:7545",
-      chainId: 1337,
+      chainId: 31337,
       accounts: process.env.GANACHE_PRIVATE_KEY
         ? [process.env.GANACHE_PRIVATE_KEY]
         : [],

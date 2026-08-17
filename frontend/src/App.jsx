@@ -1,53 +1,87 @@
-// App.jsx — Root component of our React application
+// App.jsx — Main Application Component with React Router Navigation
 //
-// Currently renders the IssueCertificate page.
-// The original health-check test is preserved below as a comment
-// in case you want to restore it.
+// LOGIC OVERVIEW:
+// 1. Uses BrowserRouter from `react-router-dom` to handle client-side routing.
+// 2. Renders a unified top Masthead Navigation Bar with tabs for "Issue Certificate" and "Verify Certificate".
+// 3. Configures routes:
+//    - `/` or `/issue` -> IssueCertificate component
+//    - `/verify`      -> VerifyCertificate component
 
+import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import IssueCertificate from './components/IssueCertificate';
+import VerifyCertificate from './components/VerifyCertificate';
 
-// ---------------------------------------------------------------------------
-// ORIGINAL HEALTH-CHECK CODE (kept for reference):
-// ---------------------------------------------------------------------------
-// import { useState, useEffect } from 'react';
-// import api from './api';
-// import './App.css';
-//
-// function App() {
-//   const [status, setStatus] = useState(null);
-//   const [error, setError] = useState(null);
-//   useEffect(() => {
-//     async function checkHealth() {
-//       try {
-//         const response = await api.get('/health');
-//         setStatus(response.data);
-//       } catch (err) {
-//         setError(err.response
-//           ? `Server error: ${err.response.status} — ${err.response.statusText}`
-//           : `Could not reach backend. Is it running at http://localhost:5000?`
-//         );
-//       }
-//     }
-//     checkHealth();
-//   }, []);
-//   return (
-//     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-//       <h1>Blockchain Certificate System</h1>
-//       <h2>Backend Connection Test</h2>
-//       {!status && !error && <p>⏳ Checking backend status…</p>}
-//       {status && <p style={{ color: 'green' }}>✅ Backend status: <strong>{status.message}</strong></p>}
-//       {error && <p style={{ color: 'red' }}>❌ {error}</p>}
-//       {status && <details><summary>Full response</summary><pre>{JSON.stringify(status, null, 2)}</pre></details>}
-//     </div>
-//   );
-// }
-// ---------------------------------------------------------------------------
+function Navigation() {
+  return (
+    <header className="bg-[var(--color-parchment-paper)] border-b-2 border-[var(--color-brass-border)] shadow-sm sticky top-0 z-50 font-['Cinzel']">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between py-3 gap-3">
+        
+        {/* Registry Brand Header */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-[var(--color-oxblood)] bg-[var(--color-oxblood)] text-white flex items-center justify-center text-[10px] font-bold tracking-tighter">
+            REG
+          </div>
+          <div>
+            <div className="text-xs font-bold tracking-widest text-[var(--color-ink-primary)] uppercase">
+              Republic Certificate Registry
+            </div>
+            <div className="text-[10px] font-['JetBrains_Mono'] text-[var(--color-ink-muted)]">
+              Cryptographic Ledger Authority
+            </div>
+          </div>
+        </div>
+
+        {/* Navigation Tabs */}
+        <nav className="flex items-center gap-2 border border-[var(--color-brass-border)] bg-[var(--color-brass-light)] p-1 rounded-sm">
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) =>
+              `px-4 py-1.5 text-xs font-bold tracking-wider uppercase transition-colors duration-150 rounded-xs ${
+                isActive
+                  ? 'bg-[var(--color-oxblood)] text-white shadow-xs'
+                  : 'text-[var(--color-ink-primary)] hover:text-[var(--color-oxblood)] hover:bg-white/50'
+              }`
+            }
+          >
+            📜 Issue Certificate
+          </NavLink>
+
+          <NavLink
+            to="/verify"
+            className={({ isActive }) =>
+              `px-4 py-1.5 text-xs font-bold tracking-wider uppercase transition-colors duration-150 rounded-xs ${
+                isActive
+                  ? 'bg-[var(--color-oxblood)] text-white shadow-xs'
+                  : 'text-[var(--color-ink-primary)] hover:text-[var(--color-oxblood)] hover:bg-white/50'
+              }`
+            }
+          >
+            🔍 Verify Certificate
+          </NavLink>
+        </nav>
+
+      </div>
+    </header>
+  );
+}
 
 function App() {
-  // Render the IssueCertificate page as the main (and only) page for now.
-  // When you add routing later (e.g., react-router-dom), this becomes one
-  // route: <Route path="/issue" element={<IssueCertificate />} />
-  return <IssueCertificate />;
+  return (
+    <BrowserRouter>
+      <div className="min-h-screen bg-[var(--color-parchment-bg)] flex flex-col">
+        <Navigation />
+        <div className="flex-1">
+          <Routes>
+            <Route path="/" element={<IssueCertificate />} />
+            <Route path="/issue" element={<Navigate to="/" replace />} />
+            <Route path="/verify" element={<VerifyCertificate />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
+      </div>
+    </BrowserRouter>
+  );
 }
 
 export default App;
