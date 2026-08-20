@@ -16,7 +16,7 @@ If even a single character in a certificate is altered after issuance, the recal
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 - 🔐 **Tamper-proof issuance** — certificate hashes are permanently recorded on-chain and cannot be silently altered
 - ⚡ **Instant verification** — no manual calls or paperwork; verification happens in seconds
