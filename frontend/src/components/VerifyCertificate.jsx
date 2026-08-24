@@ -8,6 +8,7 @@
 // 4. Manages async verification loading state, authentic result state, and unverified warning state.
 
 import { useState, useRef } from 'react';
+import { Scanner } from '@yudiel/react-qr-scanner';
 import api from '../api';
 
 // Helper to convert backend HTTP/network errors into human-readable text
@@ -42,14 +43,53 @@ export default function VerifyCertificate() {
   const [certId, setCertId]     = useState('');
   const [certFile, setCertFile] = useState(null);
 
+  // Input mode state ('manual' | 'scan')
+  const [inputMode, setInputMode]                   = useState('manual');
+  const [cameraError, setCameraError]               = useState(null);
+  const [scanSuccessMessage, setScanSuccessMessage] = useState(null);
+
   // Validation, async loading, server error, and verification response states
-  const [fieldErrors, setFieldErrors] = useState({});
-  const [isLoading, setIsLoading]     = useState(false);
-  const [serverError, setServerError] = useState(null);
+  const [fieldErrors, setFieldErrors]   = useState({});
+  const [isLoading, setIsLoading]       = useState(false);
+  const [serverError, setServerError]   = useState(null);
   const [verifyResult, setVerifyResult] = useState(null);
 
   // Ref to reset file input element programmatically
   const fileInputRef = useRef(null);
+
+  // Handle successful QR detection
+  const handleScan = (detectedCodes) => {
+    if (!detectedCodes || detectedCodes.length === 0) return;
+    const scannedValue = detectedCodes[0].rawValue;
+    if (scannedValue && scannedValue.trim()) {
+      const trimmedId = scannedValue.trim();
+      setCertId(trimmedId);
+      if (fieldErrors.certId) {
+        setFieldErrors((prev) => ({ ...prev, certId: undefined }));
+      }
+      setCameraError(null);
+      setScanSuccessMessage(`Captured Registry ID: ${trimmedId}`);
+      setInputMode('manual');
+    }
+  };
+
+  // Handle optical camera / permission failures in registry voice
+  const handleScannerError = (error) => {
+    let message = 'Unable to initialize optical sensor. Please verify camera permissions or switch to manual entry.';
+    const errName = error?.name || '';
+    const errMsg = String(error?.message || error || '');
+
+    if (errName === 'NotAllowedError' || errMsg.includes('Permission') || errMsg.includes('denied')) {
+      message = 'Optical sensor access was restricted by browser security policy. Please grant camera permission or enter the Certificate ID manually.';
+    } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError' || errMsg.includes('found')) {
+      message = 'No optical camera device was detected on this terminal. Please switch to manual ID entry.';
+    } else if (errName === 'NotReadableError' || errMsg.includes('busy') || errMsg.includes('allocated')) {
+      message = 'The optical sensor is currently locked by another application. Please release the device or enter the ID manually.';
+    } else if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      message = 'Optical scanning requires a secure origin (HTTPS or localhost). Please enter the Certificate ID manually.';
+    }
+    setCameraError(message);
+  };
 
   // Client-side validation function
   const validateForm = () => {
@@ -338,33 +378,143 @@ export default function VerifyCertificate() {
         {/* Verification Form Body */}
         <form onSubmit={handleSubmit} noValidate className="space-y-6">
           
-          {/* Certificate ID Field */}
+          {/* Certificate ID Field with Manual / QR Scan Toggle */}
           <div>
-            <div className="flex justify-between items-baseline mb-1">
-              <label htmlFor="certId" className="font-['Cinzel'] text-xs font-bold tracking-wider text-[var(--color-ink-primary)] uppercase">
-                Certificate ID <span className="text-[var(--color-oxblood)]">*</span>
-              </label>
-              <span className="font-['JetBrains_Mono'] text-[11px] text-[var(--color-ink-faint)]">
-                [Registration Serial]
-              </span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+              <div className="flex items-baseline gap-2">
+                <label htmlFor="certId" className="font-['Cinzel'] text-xs font-bold tracking-wider text-[var(--color-ink-primary)] uppercase">
+                  Certificate ID <span className="text-[var(--color-oxblood)]">*</span>
+                </label>
+                <span className="font-['JetBrains_Mono'] text-[11px] text-[var(--color-ink-faint)]">
+                  [Registration Serial]
+                </span>
+              </div>
+
+              {/* Mode Toggle Tabs */}
+              <div className="inline-flex items-center border border-[var(--color-brass-border)] bg-[var(--color-brass-light)] p-0.5 rounded-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInputMode('manual');
+                    setCameraError(null);
+                  }}
+                  className={`px-3 py-1 text-[11px] font-['Cinzel'] font-bold tracking-wider uppercase transition-colors duration-150 rounded-xs cursor-pointer ${
+                    inputMode === 'manual'
+                      ? 'bg-[var(--color-oxblood)] text-white shadow-xs'
+                      : 'text-[var(--color-ink-primary)] hover:text-[var(--color-oxblood)] hover:bg-white/50'
+                  }`}
+                >
+                  ✍️ Enter ID Manually
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInputMode('scan');
+                    setCameraError(null);
+                    setScanSuccessMessage(null);
+                  }}
+                  className={`px-3 py-1 text-[11px] font-['Cinzel'] font-bold tracking-wider uppercase transition-colors duration-150 rounded-xs cursor-pointer ${
+                    inputMode === 'scan'
+                      ? 'bg-[var(--color-oxblood)] text-white shadow-xs'
+                      : 'text-[var(--color-ink-primary)] hover:text-[var(--color-oxblood)] hover:bg-white/50'
+                  }`}
+                >
+                  📷 Scan QR Code
+                </button>
+              </div>
             </div>
-            <input
-              id="certId"
-              type="text"
-              value={certId}
-              onChange={(e) => {
-                setCertId(e.target.value);
-                if (fieldErrors.certId) setFieldErrors((p) => ({ ...p, certId: undefined }));
-              }}
-              placeholder="e.g. GOV-REG-2026-8849"
-              className={`w-full bg-white border ${
-                fieldErrors.certId ? 'border-[var(--color-oxblood)] ring-1 ring-[var(--color-oxblood)]' : 'border-[var(--color-parchment-border)]'
-              } focus:border-[var(--color-brass)] focus:ring-1 focus:ring-[var(--color-brass)] px-4 py-2.5 font-['JetBrains_Mono'] text-sm text-[var(--color-ink-primary)] placeholder-[var(--color-ink-faint)] outline-none transition-all`}
-            />
-            {fieldErrors.certId && (
-              <p className="mt-1 text-xs text-[var(--color-oxblood)] font-['Plus_Jakarta_Sans']">
-                {fieldErrors.certId}
-              </p>
+
+            {/* Scan Success Notice Banner */}
+            {scanSuccessMessage && (
+              <div className="mb-3 p-3 bg-[var(--color-verdigris-light)] border border-[var(--color-verdigris)] text-[var(--color-verdigris)] text-xs font-['Plus_Jakarta_Sans'] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold">✓</span>
+                  <span>{scanSuccessMessage} (Auto-filled below)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setScanSuccessMessage(null)}
+                  className="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink-primary)] font-mono ml-2 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Manual Entry or QR Scanner Viewport */}
+            {inputMode === 'manual' ? (
+              <>
+                <input
+                  id="certId"
+                  type="text"
+                  value={certId}
+                  onChange={(e) => {
+                    setCertId(e.target.value);
+                    if (fieldErrors.certId) setFieldErrors((p) => ({ ...p, certId: undefined }));
+                  }}
+                  placeholder="e.g. GOV-REG-2026-8849"
+                  className={`w-full bg-white border ${
+                    fieldErrors.certId ? 'border-[var(--color-oxblood)] ring-1 ring-[var(--color-oxblood)]' : 'border-[var(--color-parchment-border)]'
+                  } focus:border-[var(--color-brass)] focus:ring-1 focus:ring-[var(--color-brass)] px-4 py-2.5 font-['JetBrains_Mono'] text-sm text-[var(--color-ink-primary)] placeholder-[var(--color-ink-faint)] outline-none transition-all`}
+                />
+                {fieldErrors.certId && (
+                  <p className="mt-1 text-xs text-[var(--color-oxblood)] font-['Plus_Jakarta_Sans']">
+                    {fieldErrors.certId}
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="border-2 border-[var(--color-brass)] bg-[var(--color-brass-light)] p-4 text-center">
+                <div className="mb-3">
+                  <div className="font-['Cinzel'] text-xs font-bold text-[var(--color-brass)] uppercase tracking-wider">
+                    Registry Optical Scanner Interface
+                  </div>
+                  <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
+                    Position the certificate QR code within the optical viewfinder frame.
+                  </p>
+                </div>
+
+                {cameraError ? (
+                  <div className="p-4 bg-red-50 border-l-4 border-[var(--color-oxblood)] text-[var(--color-oxblood)] text-left text-xs font-['Plus_Jakarta_Sans'] mb-2">
+                    <div className="font-bold font-['Cinzel'] uppercase tracking-wider text-xs mb-1">
+                      Optical Sensor Notice
+                    </div>
+                    <p className="mb-3">{cameraError}</p>
+                    <button
+                      type="button"
+                      onClick={() => setInputMode('manual')}
+                      className="font-['Cinzel'] text-xs font-bold uppercase underline text-[var(--color-oxblood)] hover:text-[var(--color-oxblood-hover)] cursor-pointer"
+                    >
+                      Switch to manual entry →
+                    </button>
+                  </div>
+                ) : (
+                  <div className="max-w-xs mx-auto overflow-hidden border-2 border-dashed border-[var(--color-brass)] bg-black/90 relative p-1 rounded-xs">
+                    <Scanner
+                      onScan={handleScan}
+                      onError={handleScannerError}
+                      formats={['qr_code']}
+                      styles={{
+                        container: { width: '100%', height: '240px' },
+                        video: { width: '100%', height: '100%', objectFit: 'cover' }
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="mt-3 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInputMode('manual');
+                      setCameraError(null);
+                    }}
+                    className="font-['Cinzel'] text-xs font-semibold text-[var(--color-ink-muted)] hover:text-[var(--color-ink-primary)] underline cursor-pointer"
+                  >
+                    Cancel Scan & Return to Manual Entry
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 

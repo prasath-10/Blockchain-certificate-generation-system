@@ -1,4 +1,4 @@
-﻿// IssueCertificate.jsx
+// IssueCertificate.jsx
 // React component for issuing blockchain-anchored government certificates.
 //
 // LOGIC OVERVIEW:
@@ -8,6 +8,7 @@
 // 4. Manages async loading state, success response state (receipt), and friendly error handling.
 
 import { useState, useRef } from 'react';
+import { QRCodeCanvas } from 'qrcode.react';
 import api from '../api';
 
 // Allowed options for Certificate Type dropdown
@@ -61,6 +62,8 @@ export default function IssueCertificate() {
 
   // Ref to reset the file input element programmatically
   const fileInputRef = useRef(null);
+  // Ref for the QR canvas element to enable PNG export
+  const qrCanvasRef = useRef(null);
 
   // Client-side validation function
   const validateForm = () => {
@@ -134,8 +137,24 @@ export default function IssueCertificate() {
     }
   };
 
+  // Download QR code canvas as high-resolution PNG image
+  const handleDownloadQR = () => {
+    const canvas = qrCanvasRef.current;
+    if (!canvas) return;
+    const resolvedCertId = successData?.certificateId || successData?.certificate_id || certId || 'CERTIFICATE';
+    const imageUri = canvas.toDataURL('image/png');
+    const downloadLink = document.createElement('a');
+    downloadLink.href = imageUri;
+    downloadLink.download = `QR-${resolvedCertId}.png`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
   // Success view (Receipt view styled as an officially stamped & verified ledger entry)
   if (successData) {
+    const issuedId = successData.certificateId || successData.certificate_id || certId;
+
     return (
       <main className="min-h-screen bg-[var(--color-parchment-bg)] py-12 px-4 flex justify-center items-center font-['EB_Garamond']">
         <div className="w-full max-w-2xl bg-[var(--color-parchment-paper)] border-4 border-double border-[var(--color-brass)] p-8 sm:p-12 relative shadow-lg">
@@ -156,13 +175,13 @@ export default function IssueCertificate() {
           </div>
 
           {/* Receipt Data Ledger */}
-          <div className="border border-[var(--color-parchment-border)] bg-[var(--color-brass-light)] p-6 mb-8 space-y-4">
+          <div className="border border-[var(--color-parchment-border)] bg-[var(--color-brass-light)] p-6 mb-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[var(--color-parchment-border)] pb-3">
               <span className="font-['Cinzel'] text-xs font-semibold tracking-wider text-[var(--color-ink-muted)] uppercase">
                 Certificate Registry ID
               </span>
               <span className="font-['JetBrains_Mono'] text-sm font-semibold text-[var(--color-ink-primary)] mt-1 sm:mt-0">
-                {successData.certificateId || successData.certificate_id || certId}
+                {issuedId}
               </span>
             </div>
 
@@ -181,6 +200,40 @@ export default function IssueCertificate() {
               </span>
               <span className="font-['JetBrains_Mono'] text-xs font-semibold text-[var(--color-verdigris)] break-all max-w-sm text-right mt-1 sm:mt-0">
                 {successData.txHash || successData.tx_hash || successData.transactionHash || '—'}
+              </span>
+            </div>
+          </div>
+
+          {/* Official QR Code Security Stamp Box */}
+          <div className="border border-[var(--color-brass-border)] bg-[var(--color-brass-light)] p-6 mb-8 flex flex-col sm:flex-row items-center justify-between gap-6 shadow-inner">
+            <div className="flex flex-col items-center sm:items-start text-center sm:text-left">
+              <div className="inline-flex items-center gap-1.5 text-xs font-['Cinzel'] font-bold tracking-wider text-[var(--color-brass)] uppercase mb-1">
+                <span>🛡️</span> Official Security QR Stamp
+              </div>
+              <p className="text-xs text-[var(--color-ink-muted)] max-w-xs mb-4">
+                Encodes the official Certificate ID for rapid optical verification on the public verification portal.
+              </p>
+              <button
+                type="button"
+                onClick={handleDownloadQR}
+                className="inline-flex items-center gap-2 bg-white hover:bg-[var(--color-brass-light)] text-[var(--color-ink-primary)] font-['Cinzel'] text-xs font-bold tracking-wider uppercase px-4 py-2 border border-[var(--color-brass)] shadow-xs transition-colors duration-150 cursor-pointer"
+              >
+                <span>📥</span> Download QR Code
+              </button>
+            </div>
+
+            <div className="relative p-3 bg-white border-2 border-[var(--color-brass)] shadow-md flex flex-col items-center">
+              <QRCodeCanvas
+                ref={qrCanvasRef}
+                value={issuedId}
+                size={136}
+                level="H"
+                marginSize={1}
+                fgColor="#1C1917"
+                bgColor="#FFFFFF"
+              />
+              <span className="mt-2 text-[10px] font-['JetBrains_Mono'] text-[var(--color-ink-muted)] uppercase tracking-wider font-semibold">
+                {issuedId}
               </span>
             </div>
           </div>
